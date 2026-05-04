@@ -111,9 +111,11 @@ class SM_Model(object):
                     self.a2.append(constants["doppler_broadening"][key]["a2"])
                     self.sigma_beta_1.append(
                         constants["doppler_broadening"][key]["sigma_beta_1"]
+                        * config_mlem["width_factor"]
                     )
                     self.sigma_beta_2.append(
                         constants["doppler_broadening"][key]["sigma_beta_2"]
+                        * config_mlem["width_factor"]
                     )
                 else:
                     # interpolate
@@ -156,7 +158,8 @@ class SM_Model(object):
                         )
                     )
                     self.sigma_beta_1.append(
-                        torch_1d_interp(
+                        config_mlem["width_factor"]
+                        * torch_1d_interp(
                             energy,
                             known_energies,
                             torch.tensor(
@@ -171,7 +174,8 @@ class SM_Model(object):
                         )
                     )
                     self.sigma_beta_2.append(
-                        torch_1d_interp(
+                        config_mlem["width_factor"]
+                        * torch_1d_interp(
                             energy,
                             known_energies,
                             torch.tensor(
@@ -779,7 +783,9 @@ class SM_Model(object):
             cos_beta_2 = 1.0 - (
                 # E_gamma - event.Eg is the energy after the 2nd Compton
                 # scaterring
-                self.m_e * event.Eg / (E_gamma * (E_gamma - event.Eg))
+                self.m_e
+                * event.Eg
+                / (E_gamma * (E_gamma - event.Eg))
             )
             mask_partial = ~mask_tot & (torch.abs(cos_beta_2) <= 1.0)
             if torch.any(mask_partial):
