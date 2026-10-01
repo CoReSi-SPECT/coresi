@@ -5,8 +5,7 @@
 import random
 from logging import getLogger
 from typing import Callable
-
-import torch
+import torch, torchvision
 
 from coresi.camera import Camera, generate_random_angle
 from coresi.event import Event
@@ -69,13 +68,13 @@ def attenuation_exp(
     cameras: list[Camera],
     volume_config: dict,
     energies: list[float],
-	x: torch.Tensor,
-	y: torch.Tensor,
-	z: torch.Tensor,
+    x: torch.Tensor,
+    y: torch.Tensor,
+    z: torch.Tensor,
 ):
     sensitivity_vol = Image(len(energies), volume_config)
     cameras = [cameras[0]]
-    
+
     for camera in cameras:
         b, d = camera.sca_layers[0].dim.x / 2, camera.sca_layers[0].dim.y / 2
         a, c = -b, -d
@@ -100,18 +99,20 @@ def attenuation_exp(
             dims=1,
         ).to(device)
         for idx_energy, energy in enumerate(energies):
-            # Only compute sensitivity for sca layers, assume probabilities for 
+            # Only compute sensitivity for sca layers, assume probabilities for
             # hits in absorber the same. Also assume first hit in sca. To be improved ...
             for idx_layer, layer in enumerate(camera.sca_layers):
-            #for idx_layer, layer in enumerate(camera.sca_layers + camera.abs_layers):
+                # for idx_layer, layer in enumerate(camera.sca_layers + camera.abs_layers):
                 # Compton linear attenuation coefficient (incoherent scattering)
-                mu_Compton = camera.get_incoherent_diff_xsection(
-                           energy, layer.detector_type
-                           ) * camera.sca_density
+                mu_Compton = (
+                    camera.get_incoherent_diff_xsection(energy, layer.detector_type)
+                    * camera.sca_density
+                )
                 # total linear attenuation coefficient
-                mu_total = camera.get_total_diff_xsection(
-                           energy, layer.detector_type
-                           ) * camera.sca_density
+                mu_total = (
+                    camera.get_total_diff_xsection(energy, layer.detector_type)
+                    * camera.sca_density
+                )
                 # 3rd dimension is z
                 D = torch.abs(points[:, 2] - layer.center.z)
                 rect = 0.0
@@ -143,7 +144,10 @@ def attenuation_exp(
                             * (
                                 1
                                 - torch.exp(
-                                    -mu_Compton * camera.sca_layers[0].dim.z * torch.sqrt(sq) / D
+                                    -mu_Compton
+                                    * camera.sca_layers[0].dim.z
+                                    * torch.sqrt(sq)
+                                    / D
                                 )
                             )
                         )
@@ -231,11 +235,25 @@ def sm_like(
             valid_events = 0
             while valid_events < mc_samples:
                 # x0, k = generate_weighted_random_point(volume, 1)
-                x0 = generate_random_point(sensitivity_vol.dim_in_cm, sensitivity_vol.center, 1)[0]
+                x0 = generate_random_point(
+                    sensitivity_vol.dim_in_cm, sensitivity_vol.center, 1
+                )[0]
                 sca = random.choice(camera.sca_layers)
                 absorber = random.choice(camera.abs_layers)
                 x1 = generate_random_point(sca.dim, sca.center, 1)[0]
+                x1 = (  # Convert the random point into camera coordinates
+                    x1[0] * camera.Ox
+                    + x1[1] * camera.Oy
+                    + x1[2] * camera.Oz
+                    + camera.origin
+                )
                 x2 = generate_random_point(absorber.dim, absorber.center, 1)[0]
+                x2 = (  # Convert the random point into camera coordinates
+                    x2[0] * camera.Ox
+                    + x2[1] * camera.Oy
+                    + x2[2] * camera.Oz
+                    + camera.origin
+                )
                 r1 = x1 - x0
                 r2 = x2 - x1
                 cosbeta = (r1 * r2).sum(axis=0) / (
@@ -277,4 +295,13 @@ def sm_like(
     # We only do the sum here rather than the average because it's unlikely we
     # get high values as the chance the cone goes perfectly through the
     # voxel is low
+
+    # sm_like Monte Carlo approach creates irregularities in the final sensitivity
+    # matrix,therefore we perform a smoothing with a gaussian kernel
+    gaussian_blur = torchvision.transforms.GaussianBlur(kernel_size=9, sigma=2.0)
+    sens_vol = sensitivity_vol.values.permute(3, 0, 1, 2)
+    sens_vol_smooth = gaussian_blur(sens_vol).permute(1, 2, 3, 0)
+
+    sensitivity_vol.values = sens_vol_smooth
+
     return sensitivity_vol.values
